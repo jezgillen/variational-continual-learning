@@ -12,12 +12,10 @@ Requirement: Tensorflow 1.4.0.
 
 The printed results are matrices where each row i contains the test set accuracies on all previously observed tasks after seeing task i. The average accuracy will also be plotted and saved to [results/](results/). They should be similar to the following figures:
 
-<p align="center"> 
-	Permuted MNIST <br/>
-	<img src="results/permuted.jpg"/> 
-</p>
+**Permuted MNIST**
 
-<p align="center"> 
-	Split MNIST <br/>
-	<img src="results/split.jpg"/> 
-</p>
+![](results/permuted.jpg)
+
+**Split MNIST**
+
+![](results/split.jpg)

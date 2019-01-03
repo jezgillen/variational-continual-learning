@@ -1,24 +1,26 @@
+#!/usr/bin/python3
+
 import numpy as np
 import tensorflow as tf
 import gzip
-import cPickle
+import pickle
+from copy import deepcopy
 import sys
-sys.path.extend(['alg/'])
+from keras.datasets import mnist
+
+sys.path.append('alg/')
+import utils
 import vcl
 import coreset
-import utils
-from copy import deepcopy
 
 class SplitMnistGenerator():
     def __init__(self):
-        f = gzip.open('data/mnist.pkl.gz', 'rb')
-        train_set, valid_set, test_set = cPickle.load(f)
-        f.close()
+        (X, Y), (X_test, Y_test) = mnist.load_data()
 
-        self.X_train = np.vstack((train_set[0], valid_set[0]))
-        self.X_test = test_set[0]
-        self.train_label = np.hstack((train_set[1], valid_set[1]))
-        self.test_label = test_set[1]
+        self.X_train = np.reshape(X, (-1, 28*28))
+        self.X_test =  np.reshape(X_test, (-1, 28*28))
+        self.train_label = Y
+        self.test_label = Y_test
 
         self.sets_0 = [0, 2, 4, 6, 8]
         self.sets_1 = [1, 3, 5, 7, 9]
@@ -55,7 +57,7 @@ class SplitMnistGenerator():
 
 hidden_size = [256, 256]
 batch_size = None
-no_epochs = 120
+no_epochs = 12 #WAS 120, just making it faster
 single_head = False
 
 # Run vanilla VCL
@@ -66,7 +68,7 @@ coreset_size = 0
 data_gen = SplitMnistGenerator()
 vcl_result = vcl.run_vcl(hidden_size, no_epochs, data_gen, 
     coreset.rand_from_batch, coreset_size, batch_size, single_head)
-print vcl_result
+print(vcl_result)
 
 # Run random coreset VCL
 tf.reset_default_graph()
@@ -77,7 +79,7 @@ coreset_size = 40
 data_gen = SplitMnistGenerator()
 rand_vcl_result = vcl.run_vcl(hidden_size, no_epochs, data_gen, 
     coreset.rand_from_batch, coreset_size, batch_size, single_head)
-print rand_vcl_result
+print(rand_vcl_result)
 
 # Run k-center coreset VCL
 tf.reset_default_graph()
@@ -87,7 +89,7 @@ np.random.seed(1)
 data_gen = SplitMnistGenerator()
 kcen_vcl_result = vcl.run_vcl(hidden_size, no_epochs, data_gen, 
     coreset.k_center, coreset_size, batch_size, single_head)
-print kcen_vcl_result
+print(kcen_vcl_result)
 
 # Plot average accuracy
 vcl_avg = np.nanmean(vcl_result, 1)

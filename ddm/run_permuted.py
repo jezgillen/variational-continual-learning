@@ -1,8 +1,10 @@
+#!/usr/bin/python3
 import numpy as np
 import tensorflow as tf
 import gzip
-import cPickle
+import pickle
 import sys
+from keras.datasets import mnist
 sys.path.extend(['alg/'])
 import vcl
 import coreset
@@ -11,14 +13,13 @@ from copy import deepcopy
 
 class PermutedMnistGenerator():
     def __init__(self, max_iter=10):
-        f = gzip.open('data/mnist.pkl.gz', 'rb')
-        train_set, valid_set, test_set = cPickle.load(f)
-        f.close()
+        (X, Y), (X_test, Y_test) = mnist.load_data()
 
-        self.X_train = np.vstack((train_set[0], valid_set[0]))
-        self.Y_train = np.hstack((train_set[1], valid_set[1]))
-        self.X_test = test_set[0]
-        self.Y_test = test_set[1]
+        self.X_train = np.reshape(X, (-1, 28*28))
+        self.Y_train = Y
+        self.X_test =  np.reshape(X_test, (-1, 28*28))
+        self.Y_test = Y_test
+
         self.max_iter = max_iter
         self.cur_iter = 0
 
@@ -31,7 +32,7 @@ class PermutedMnistGenerator():
             raise Exception('Number of tasks exceeded!')
         else:
             np.random.seed(self.cur_iter)
-            perm_inds = range(self.X_train.shape[1])
+            perm_inds = list(range(self.X_train.shape[1]))
             np.random.shuffle(perm_inds)
 
             # Retrieve train data
@@ -50,7 +51,7 @@ class PermutedMnistGenerator():
 
 hidden_size = [100, 100]
 batch_size = 256
-no_epochs = 100
+no_epochs = 10 # was 100, just making it faster
 single_head = True
 num_tasks = 5
 
@@ -62,7 +63,7 @@ coreset_size = 0
 data_gen = PermutedMnistGenerator(num_tasks)
 vcl_result = vcl.run_vcl(hidden_size, no_epochs, data_gen, 
     coreset.rand_from_batch, coreset_size, batch_size, single_head)
-print vcl_result
+print(vcl_result)
 
 # Run random coreset VCL
 tf.reset_default_graph()
@@ -73,7 +74,7 @@ coreset_size = 200
 data_gen = PermutedMnistGenerator(num_tasks)
 rand_vcl_result = vcl.run_vcl(hidden_size, no_epochs, data_gen, 
     coreset.rand_from_batch, coreset_size, batch_size, single_head)
-print rand_vcl_result
+print(rand_vcl_result)
 
 # Run k-center coreset VCL
 tf.reset_default_graph()
@@ -83,7 +84,7 @@ np.random.seed(1)
 data_gen = PermutedMnistGenerator(num_tasks)
 kcen_vcl_result = vcl.run_vcl(hidden_size, no_epochs, data_gen, 
     coreset.k_center, coreset_size, batch_size, single_head)
-print kcen_vcl_result
+print(kcen_vcl_result)
 
 # Plot average accuracy
 vcl_avg = np.nanmean(vcl_result, 1)

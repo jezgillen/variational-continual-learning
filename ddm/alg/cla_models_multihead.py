@@ -68,7 +68,7 @@ class Cla_NN(object):
         costs = []
         # Training cycle
         for epoch in range(no_epochs):
-            perm_inds = range(x_train.shape[0])
+            perm_inds = list(range(x_train.shape[0]))
             np.random.shuffle(perm_inds)
             cur_x_train = x_train[perm_inds]
             cur_y_train = y_train[perm_inds]
@@ -89,8 +89,8 @@ class Cla_NN(object):
                 avg_cost += c / total_batch
             # Display logs per epoch step
             if epoch % display_epoch == 0:
-                print("Epoch:", '%04d' % (epoch+1), "cost=", \
-                    "{:.9f}".format(avg_cost))
+                print(("Epoch:", '%04d' % (epoch+1), "cost=", \
+                    "{:.9f}".format(avg_cost)))
             costs.append(avg_cost)
         print("Optimization Finished!")
         return costs
@@ -138,7 +138,7 @@ class Vanilla_NN(Cla_NN):
 
     def _logpred(self, inputs, targets, task_idx):
         pred = self._prediction(inputs, task_idx)
-        log_lik = - tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=targets))
+        log_lik = - tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=pred, labels=targets))
         return log_lik
 
     def create_weights(self, in_dim, hidden_size, out_dim, prev_weights):
@@ -252,7 +252,7 @@ class MFVI_NN(Cla_NN):
     def _logpred(self, inputs, targets, task_idx):
         pred = self._prediction(inputs, task_idx, self.no_train_samples)
         targets = tf.tile(tf.expand_dims(targets, 0), [self.no_train_samples, 1, 1])
-        log_lik = - tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=targets))
+        log_lik = - tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=pred, labels=targets))
         return log_lik
 
     def _KL_term(self):
