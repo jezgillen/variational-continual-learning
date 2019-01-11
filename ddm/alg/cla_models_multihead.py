@@ -117,6 +117,9 @@ class Vanilla_NN(Cla_NN):
     def __init__(self, input_size, hidden_size, output_size, training_size, prev_weights=None, learning_rate=0.001):
 
         super(Vanilla_NN, self).__init__(input_size, hidden_size, output_size, training_size)
+
+        print(f"input: {input_size}, hidden: {hidden_size}, output_size: {output_size}")
+
         # init weights and biases
         self.W, self.b, self.W_last, self.b_last, self.size = self.create_weights(
                 input_size, hidden_size, output_size, prev_weights)
@@ -131,9 +134,9 @@ class Vanilla_NN(Cla_NN):
     def _prediction(self, inputs, task_idx):
         act = inputs
         for i in range(self.no_layers-1):
-            pre = tf.add(tf.matmul(act, self.W[i]), self.b[i])
+            pre = act@self.W[i] + self.b[i]
             act = tf.nn.relu(pre)
-        pre = tf.add(tf.matmul(act, tf.gather(self.W_last, task_idx)), tf.gather(self.b_last, task_idx))
+        pre = act@tf.gather(self.W_last, task_idx) + tf.gather(self.b_last, task_idx)
         return pre
 
     def _logpred(self, inputs, targets, task_idx):
@@ -210,42 +213,63 @@ class MFVI_NN(Cla_NN):
         self.no_train_samples = no_train_samples
         self.no_pred_samples = no_pred_samples
         self.pred = self._prediction(self.x, self.task_idx, self.no_pred_samples)
-        self.cost = tf.div(self._KL_term(), training_size) - self._logpred(self.x, self.y, self.task_idx)
+        self.cost = self._KL_term()/training_size - self._logpred(self.x, self.y, self.task_idx)
         
         self.assign_optimizer(learning_rate)
         self.assign_session()
 
-    def _prediction(self, inputs, task_idx, no_samples):
-        return self._prediction_layer(inputs, task_idx, no_samples)
+    def _prediction(self, inputs, task_idx, num_samples=1):
+        return self._prediction_layer(inputs, task_idx, num_samples)
 
     # this samples a layer at a time
     def _prediction_layer(self, inputs, task_idx, no_samples):
         K = no_samples
+        
+        # Transforms inputs from [batch, input] into [sample, batch, input]
+        # to fit with the number of samples taken from the parameters
+        # This is a hacky way of doing broadcasting
         act = tf.tile(tf.expand_dims(inputs, 0), [K, 1, 1])        
+
         for i in range(self.no_layers-1):
             din = self.size[i]
             dout = self.size[i+1]
+            # Sampling from parameter distributions
             eps_w = tf.random_normal((K, din, dout), 0, 1, dtype=tf.float32)
             eps_b = tf.random_normal((K, 1, dout), 0, 1, dtype=tf.float32)
             
-            weights = tf.add(tf.multiply(eps_w, tf.exp(0.5*self.W_v[i])), self.W_m[i])
-            biases = tf.add(tf.multiply(eps_b, tf.exp(0.5*self.b_v[i])), self.b_m[i])
-            pre = tf.add(tf.einsum('mni,mio->mno', act, weights), biases)
+            weights = eps_w*tf.exp(0.5*self.W_v[i]) + self.W_m[i]
+            biases = eps_b*tf.exp(0.5*self.b_v[i]) + self.b_m[i]
+
+            # This is batch matrix multiplication, 
+            # with the batches being the number of samples in this case
+            #  pre = tf.einsum('mni,mio->mno', act, weights) + biases
+            pre = act@weights + biases
+
             act = tf.nn.relu(pre)
         din = self.size[-2]
         dout = self.size[-1]
         eps_w = tf.random_normal((K, din, dout), 0, 1, dtype=tf.float32)
         eps_b = tf.random_normal((K, 1, dout), 0, 1, dtype=tf.float32)
 
+        # This just indexes into an array of network heads
         Wtask_m = tf.gather(self.W_last_m, task_idx)
         Wtask_v = tf.gather(self.W_last_v, task_idx)
         btask_m = tf.gather(self.b_last_m, task_idx)
         btask_v = tf.gather(self.b_last_v, task_idx)
-        weights = tf.add(tf.multiply(eps_w, tf.exp(0.5*Wtask_v)), Wtask_m)
-        biases = tf.add(tf.multiply(eps_b, tf.exp(0.5*btask_v)), btask_m)
-        act = tf.expand_dims(act, 3)
-        weights = tf.expand_dims(weights, 1)
-        pre = tf.add(tf.reduce_sum(act * weights, 2), biases)
+        weights = eps_w*tf.exp(0.5*Wtask_v) + Wtask_m
+        biases = eps_b*tf.exp(0.5*btask_v) + btask_m
+
+        # So this weirdness appears to be a dumb way of doing matrix multiplication, will probably
+        #  find out why they did it this way later
+
+        #  # [samples, batch, vector] -> [samples, batch, vector, 1]
+        #  act = tf.expand_dims(act, 3)
+        #  # [samples, din, dout] -> [samples, 1, din, dout]
+        #  weights = tf.expand_dims(weights, 1)
+        #  pre = tf.reduce_sum(act * weights, 2) + biases
+        #  # Output should be of shape [samples, batch, dout]
+
+        pre = act@weights + biases
 
         return pre
 
