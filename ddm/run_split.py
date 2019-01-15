@@ -2,8 +2,6 @@
 
 import numpy as np
 import tensorflow as tf
-import gzip
-import pickle
 from copy import deepcopy
 import sys
 from keras.datasets import mnist

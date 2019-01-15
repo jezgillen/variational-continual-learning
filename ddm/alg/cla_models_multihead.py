@@ -5,42 +5,6 @@ from copy import deepcopy
 np.random.seed(0)
 tf.set_random_seed(0)
 
-# variable initialization functions
-def weight_variable(shape, init_weights=None):
-    if init_weights is not None:
-        initial = tf.constant(init_weights)
-    else:
-        initial = tf.truncated_normal(shape, stddev=0.1)
-    return tf.Variable(initial)
-
-def bias_variable(shape):
-    initial = tf.constant(0.1, shape=shape)
-    return tf.Variable(initial)
-
-def small_variable(shape):
-    initial = tf.constant(-6.0, shape=shape)
-    return tf.Variable(initial)
-
-def zero_variable(shape):
-    initial = tf.zeros(shape=shape)
-    return tf.Variable(initial)
-
-def _create_weights_mf(in_dim, hidden_size, out_dim, init_weights=None, init_variances=None):
-    size = deepcopy(hidden_size)
-    size.append(out_dim)
-    size.insert(0, in_dim)
-    no_params = 0
-    for i in range(len(size) - 1):
-        no_weights = size[i] * size[i+1]
-        no_biases = size[i+1]
-        no_params += (no_weights + no_biases)
-    m_weights = weight_variable([no_params], init_weights)
-    if init_variances is None:
-        v_weights = small_variable([no_params])
-    else:
-        v_weights = tf.Variable(tf.constant(init_variances, dtype=tf.float32))
-    return no_params, m_weights, v_weights, size
-
 class Cla_NN(object):
     def __init__(self, input_size, hidden_size, output_size, training_size):
         # input and output placeholders
@@ -195,10 +159,11 @@ class Vanilla_NN(Cla_NN):
 """ Bayesian Neural Network with Mean field VI approximation """
 class MFVI_NN(Cla_NN):
     def __init__(self, input_size, hidden_size, output_size, training_size, 
-        no_train_samples=10, no_pred_samples=100, prev_means=None, prev_log_variances=None, learning_rate=0.001, 
-        prior_mean=0, prior_var=1):
+        no_train_samples=10, no_pred_samples=100, prev_means=None, prev_log_variances=None, 
+        learning_rate=0.001, prior_mean=0, prior_var=1):
 
         super(MFVI_NN, self).__init__(input_size, hidden_size, output_size, training_size)
+        print(f"input: {input_size}, hidden: {hidden_size}, output_size: {output_size}")
         m, v, self.size = self.create_weights(
             input_size, hidden_size, output_size, prev_means, prev_log_variances)
         self.W_m, self.b_m, self.W_last_m, self.b_last_m = m[0], m[1], m[2], m[3]
@@ -218,7 +183,7 @@ class MFVI_NN(Cla_NN):
         self.assign_optimizer(learning_rate)
         self.assign_session()
 
-    def _prediction(self, inputs, task_idx, num_samples=1):
+    def _prediction(self, inputs, task_idx, num_samples):
         return self._prediction_layer(inputs, task_idx, num_samples)
 
     # this samples a layer at a time
@@ -227,7 +192,6 @@ class MFVI_NN(Cla_NN):
         
         # Transforms inputs from [batch, input] into [sample, batch, input]
         # to fit with the number of samples taken from the parameters
-        # This is a hacky way of doing broadcasting
         act = tf.tile(tf.expand_dims(inputs, 0), [K, 1, 1])        
 
         for i in range(self.no_layers-1):
@@ -259,8 +223,8 @@ class MFVI_NN(Cla_NN):
         weights = eps_w*tf.exp(0.5*Wtask_v) + Wtask_m
         biases = eps_b*tf.exp(0.5*btask_v) + btask_m
 
-        # So this weirdness appears to be a dumb way of doing matrix multiplication, will probably
-        #  find out why they did it this way later
+        # So this weirdness appears to be a slow way of doing matrix multiplication, 
+        # I will probably find out why they did it this way later
 
         #  # [samples, batch, vector] -> [samples, batch, vector, 1]
         #  act = tf.expand_dims(act, 3)
