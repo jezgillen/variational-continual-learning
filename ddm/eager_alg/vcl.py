@@ -67,13 +67,13 @@ class Gaussian_BBB_NN(Neural_Net_Base):
        self.prior = {}
 
     def predict(self, X):
-        logits = self.model(X, samples=self.num_pred_samples)
+        logits = self.model(X, samples=self.num_pred_samples,training=False)
         predictions = tf.nn.softmax(logits)
         return tf.reduce_mean(predictions, axis=0).numpy()
 
-    def model(self, X, samples=1):
+    def model(self, X, samples=1,training=True):
         """
-        Returns logits of the model, of shape [sample, batch, logit]
+        Returns logit outputs of the model, with shape [sample, batch, logit]
         """
 
         # Transforms inputs from [batch, input] into [sample, batch, input]
@@ -81,8 +81,10 @@ class Gaussian_BBB_NN(Neural_Net_Base):
 
         z = self.fully_connected_layer(X, samples, size=(28*28, 128), name="layer_one")
         h = tf.nn.relu(z)
+        tf.layers.dropout(h, rate=0.8)
         z = self.fully_connected_layer(h, samples, size=(128, 64), name="layer_two")
         h = tf.nn.relu(z)
+        tf.layers.dropout(h, rate=0.8)
         z = self.fully_connected_layer(h, samples, size=(64, 10), name="layer_three")
         logits = z
         # logits should still be of shape [sample, batch, logit]
@@ -91,24 +93,25 @@ class Gaussian_BBB_NN(Neural_Net_Base):
     def fully_connected_layer(self, x, samples, size, name):
         try:
             weights_mean = self.weights[name+'_weights_mean']
+            #TODO some transformation on the std?
             weights_std = self.weights[name+'_weights_std']
             bias_mean = self.weights[name+'_bias_mean']
             bias_std = self.weights[name+'_bias_std']
         except KeyError:
             weights_mean = self.weights[name+'_weights_mean'] = tf.Variable(tf.zeros(size))
-            weights_std = self.weights[name+'_weights_std'] = tf.Variable(tf.ones(size)/10)
+            weights_std = self.weights[name+'_weights_std'] = tf.Variable(tf.ones(size)/80)
             bias_mean = self.weights[name+'_bias_mean'] = tf.Variable(tf.zeros(size[-1]))
-            bias_std = self.weights[name+'_bias_std'] = tf.Variable(tf.ones(size[-1])/10)
+            bias_std = self.weights[name+'_bias_std'] = tf.Variable(tf.ones(size[-1])/80)
+
 
         weights_sample = tf.random_normal((samples, *size), 
                                           mean=weights_mean,
-                                          stddev=weights_std)
+                                          stddev=tf.abs(weights_std))
         self.weight_samples[name+'_weights'] = weights_sample
 
-        #TODO some transformation on the bias sample
         bias_sample = tf.random_normal((samples, x.shape[-2], size[-1]), 
                                           mean=bias_mean,
-                                          stddev=bias_std)
+                                          stddev=tf.abs(bias_std))
         self.weight_samples[name+'_bias'] = bias_sample
         return x@weights_sample + bias_sample
 
@@ -121,9 +124,8 @@ class Gaussian_BBB_NN(Neural_Net_Base):
         logits = self.model(X, samples)
         Y = tf.tile(tf.expand_dims(Y, 0), [samples, 1, 1])
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=Y)
-        log_lik = -tf.reduce_sum(tf.reduce_mean(
-                cross_entropy,
-                axis=0),axis=0)
+        # cross entropy is of shape [sample, batch]
+        log_lik = -tf.reduce_mean(cross_entropy)
         return log_lik
 
     def KL_Divergence(self):
@@ -175,13 +177,13 @@ def main():
     #  X = X[indicies]
     #  Y = Y[indicies]
     Y = tf.one_hot(Y, 10, 1.0, 0.0)
-    X = tf.reshape(X, (-1,28*28))/156. - 1.
+    X = tf.reshape(X, (-1,28*28))/156.
     Y_test = tf.one_hot(Y_test, 10, 1.0, 0.0)
-    X_test = tf.reshape(X_test, (-1,28*28))/156. - 1.
+    X_test = tf.reshape(X_test, (-1,28*28))/156.
     
 
     model = Gaussian_BBB_NN(num_training_samples=1, num_pred_samples=5) 
-    for loss in model.train(X,Y,num_epochs=15):
+    for loss in model.train(X,Y,num_epochs=10,batch_size=64):
         print(loss)
 
     testPredictions = model.predict(X_test)
