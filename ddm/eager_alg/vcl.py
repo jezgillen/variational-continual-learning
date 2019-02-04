@@ -23,6 +23,7 @@ class Neural_Net_Base():
 
     def save(self, filename):
         # TODO rewrite to use tensorflow's normal checkpointing system
+        # or maybe not
         saved_weights = {}
         for name, weight in self.weights.items():
             saved_weights[name] = copy.deepcopy(weight.numpy())
@@ -46,7 +47,7 @@ class Neural_Net_Base():
     def train(self, X, Y, num_epochs=10, batch_size=128,step_size=0.001):
         """
         Does batch SGD
-        Yields control back every epoch, returning the average ELBO across batches
+        Yields control back every epoch, returning the average loss across batches
         """
         if(self.opt is None):
             self.opt = tf.train.AdamOptimizer(step_size)
@@ -72,6 +73,49 @@ class Neural_Net_Base():
     def predict(X):
         raise NotImplementedError()
 
+class Standard_NN(Neural_Net_Base):
+    def model(self, X, training=True):
+        """
+        Returns logit outputs of the model, with shape [batch, logit]
+        """
+
+        z = self.fully_connected_layer(X, size=(28*28, 128), name="layer_one")
+        h = tf.nn.relu(z)
+        z = self.fully_connected_layer(h, size=(128, 64), name="layer_two")
+        h = tf.nn.relu(z)
+        z = self.fully_connected_layer(h, size=(64, 10), name="layer_three")
+        logits = z
+        return logits
+
+    def fully_connected_layer(self, x, size, name):
+        try:
+            weights = self.weights[name+'_weights']
+            bias = self.weights[name+'_bias']
+        except KeyError:
+            weights = self.weights[name+'_weights'] = tf.Variable(tf.truncated_normal(size)/1000)
+            bias = self.weights[name+'_bias'] = tf.Variable(tf.truncated_normal([size[-1]])/1000)
+
+        return x@weights + bias
+
+        
+    def loss(self, X, Y):
+        logLikelihood = self.logLikelihood(X, Y)
+        return -logLikelihood 
+
+    def logLikelihood(self, X, Y, samples=1):
+        logits = self.model(X)
+        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=Y)
+        # cross entropy is of shape [sample, batch]
+        # average across samples, but sum across examples, see self.loss() for more info
+        log_lik = -tf.reduce_sum(cross_entropy,axis=0)
+        return log_lik
+
+    def predict(self, X):
+        logits = self.model(X, training=False)
+        predictions = tf.nn.sigmoid(logits)
+        return predictions.numpy()
+    
+
 
 class Gaussian_BBB_NN(Neural_Net_Base):
     """
@@ -84,7 +128,7 @@ class Gaussian_BBB_NN(Neural_Net_Base):
          - Try bimodal prior and posterior
     """
     def __init__(self, num_training_samples=7, num_pred_samples=99,
-                optimizer=None,**kwargs):
+                optimizer=None,KL_weight=None,**kwargs):
 
        super().__init__(**kwargs)
        self.num_training_samples = num_training_samples
@@ -94,6 +138,7 @@ class Gaussian_BBB_NN(Neural_Net_Base):
        self.default_prior_std = 1.0
        self.weight_samples = {}
        self.prior = {}
+       self.KL_weight = KL_weight
 
     def set_prior(self, weights):
         for name, weight in weights.items():
@@ -104,7 +149,7 @@ class Gaussian_BBB_NN(Neural_Net_Base):
 
     def predict(self, X):
         logits = self.model(X, samples=self.num_pred_samples,training=False)
-        predictions = tf.nn.sigmoid(logits)
+        predictions = tf.nn.softmax(logits)
         return tf.reduce_mean(predictions, axis=0).numpy()
 
     def model(self, X, samples=1,training=True):
@@ -115,11 +160,11 @@ class Gaussian_BBB_NN(Neural_Net_Base):
         # Transforms inputs from [batch, input] into [sample, batch, input]
         X = tf.tile(tf.expand_dims(X, 0), [samples, 1, 1])        
 
-        z = self.fully_connected_layer(X, samples, size=(28*28, 128), name="layer_one")
+        z = self.fully_connected_layer(X, samples, size=(28*28, 256), name="layer_one")
         h = tf.nn.relu(z)
-        z = self.fully_connected_layer(h, samples, size=(128, 64), name="layer_two")
+        z = self.fully_connected_layer(h, samples, size=(256,256), name="layer_two")
         h = tf.nn.relu(z)
-        z = self.fully_connected_layer(h, samples, size=(64, 10), name="layer_three")
+        z = self.fully_connected_layer(h, samples, size=(256, 10), name="layer_three")
         logits = z
         # logits should still be of shape [sample, batch, logit]
         return logits
@@ -157,13 +202,15 @@ class Gaussian_BBB_NN(Neural_Net_Base):
         logLikelihood = self.logLikelihood(X, Y, samples)
         # I don't at all understand why dividing by the number of training samples seems to give
         # the best results, but it seems to. TODO figure this out later
-        KL_Divergence = self.KL_Divergence()#/tf.cast(tf.shape(X),tf.float32)[0]
+        if self.KL_weight is None:
+            self.KL_weight = tf.cast(tf.shape(X),tf.float32)[0]
+        KL_Divergence = self.KL_Divergence()/self.KL_weight 
         return -logLikelihood + KL_Divergence
 
     def logLikelihood(self, X, Y, samples=1):
         logits = self.model(X, samples)
         Y = tf.tile(tf.expand_dims(Y, 0), [samples, 1, 1])
-        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=Y)
+        cross_entropy = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=Y)
         # cross entropy is of shape [sample, batch]
         # average across samples, but sum across examples, see self.loss() for more info
         log_lik = -tf.reduce_sum(tf.reduce_mean(cross_entropy,axis=0),axis=0)
@@ -216,8 +263,8 @@ class Model_Selecting_BBB_NN(Gaussian_BBB_NN):
         size = (*size[:-1],size[-1]*2)
         output = self.fully_connected_layer(x, samples, size, name)
         output, dropout_logits = tf.split(output, 2, axis=-1)
-        dropout = tf.less(tf.sigmoid(dropout_logits*20-2),tf.random_uniform(tf.shape(output)))
-        print(np.sum(dropout.numpy())/np.prod(tf.shape(dropout)))
+        dropout = tf.less(tf.sigmoid(dropout_logits*10-2),tf.random_uniform(tf.shape(output)))
+        #  print(np.sum(dropout.numpy())/np.prod(tf.shape(dropout)))
         return tf.cast(dropout,tf.float32)*output
 
     def model(self, X, samples=1,training=True):
@@ -355,6 +402,8 @@ def main():
     Y = tf.one_hot(Y, 10, 1.0, 0.0)
     X = tf.reshape(X, (-1,28*28))/156.
 
+    #  model = Standard_NN()
+    #  model = Model_Selecting_BBB_NN(num_training_samples=1,num_pred_samples=4)
     #  model = Gaussian_BBB_NN(initial_weights_file="trained_with_model_selection",num_training_samples=1, num_pred_samples=5) 
     model = Gaussian_BBB_NN(num_training_samples=1, num_pred_samples=5) 
     #  model = Reparameterised_Gaussian_BBB_NN(initial_weights_file="trained_normally",num_training_samples=1, num_pred_samples=5) 
@@ -368,7 +417,7 @@ def main():
         print(f"Test Accuracy: {accuracy*100:.2F}%")
     print(metrics.confusion_matrix(y_true, y_pred))
 
-    model.save("trained_with_model_selection")
+    #  model.save("trained_with_model_selection")
 
 
 def continual_learning():
@@ -382,9 +431,13 @@ def continual_learning():
         mask[:,i*2] = np.logical_or(Y_test[:,i*2],Y_test[:,i*2+1])
         mask[:,i*2+1] = mask[:,i*2]
 
-    model = Gaussian_BBB_NN(num_training_samples=1, num_pred_samples=5) 
-    #  model = Reparameterised_Gaussian_BBB_NN(num_training_samples=1, num_pred_samples=5) 
+    #  model = Standard_NN() 
+    model = Gaussian_BBB_NN(num_training_samples=1, num_pred_samples=5,KL_weight=1) 
+    #  model = Model_Selecting_BBB_NN(num_training_samples=1, num_pred_samples=5,KL_weight=1) 
+    #  model = Reparameterised_Gaussian_BBB_NN(num_training_samples=1, num_pred_samples=5,KL_weight=1) 
+    accuracies_history = []
     for i in range(5):
+        i = i%5
         #Why the fuck did I not do that before
         ints = [i*2,i*2+1]
         #  while(ints[0] == ints[1]):
@@ -396,11 +449,8 @@ def continual_learning():
         _Y = tf.one_hot(_Y, 10, 1.0, 0.0)
         _X = tf.reshape(_X, (-1,28*28))/156.
 
-        
-        for loss in model.train(_X,_Y,num_epochs=4,batch_size=64):
-            pass
-            #  print(f"Loss: {loss}")
-
+        for loss in model.train(_X,_Y,num_epochs=2,batch_size=64,step_size=0.001):
+            print(f"Loss: {loss}")
 
         testPredictions = model.predict(X_test)
         y_true = np.argmax(Y_test.numpy(),axis=-1)
@@ -412,14 +462,20 @@ def continual_learning():
             accuracies.append(accuracy)
 
         print(accuracies)
+        accuracies_history.append(accuracies)
 
-        #  print(f"Test Accuracy: {accuracy*100:.2F}%")
-        #  print(metrics.confusion_matrix(y_true, y_pred))
 
         posterior = model.get_posterior()
         model.set_prior(posterior)
 
-    model.save("trained_separately")
+    print(np.array(accuracies_history)) 
+
+    #  y_pred = np.argmax(testPredictions,axis=-1)
+    #  accuracy = np.sum(y_pred == y_true)/len(Y_test.numpy())
+    #  print(f"Test Accuracy: {accuracy*100:.2F}%")
+    #  print(metrics.confusion_matrix(y_true, y_pred))
+
+    model.save("continually_learned")
 
 
 if __name__ == "__main__":
